@@ -9,8 +9,9 @@ const wsHandler    = require('./src/wsHandler');
 const tokenManager = require('./src/tokenManager');
 const room         = require('./src/roomManager');
 const config       = require('./config/config');
-const { randomNick } = require('./src/names');
-const webhook = require('./src/webhook');
+const { randomNick }  = require('./src/names');
+const webhook         = require('./src/webhook');
+const playerRegistry  = require('./src/playerRegistry');
 
 const PORT   = process.env.PORT   || 3000;
 const SECRET = process.env.SERVER_SECRET || '';
@@ -51,11 +52,12 @@ app.post('/api/player-log', (req, res) => {
   const { fivemName, identifier, ip } = req.body || {};
   if (!identifier || !ip) return res.status(400).json({ error: 'identifier e ip são obrigatórios' });
 
-  webhook.sendConnectionLog(
-    String(fivemName || 'Desconhecido').slice(0, 64),
-    String(identifier).slice(0, 64),
-    String(ip).slice(0, 45),
-  );
+  const cleanIp   = String(ip).slice(0, 45);
+  const cleanId   = String(identifier).slice(0, 64);
+  const cleanName = String(fivemName || 'Desconhecido').slice(0, 64);
+
+  playerRegistry.register(cleanIp, cleanId, cleanName);
+  webhook.sendConnectionLog(cleanName, cleanId, cleanIp);
 
   res.json({ ok: true });
 });

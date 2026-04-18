@@ -1,8 +1,9 @@
-const room    = require('./roomManager');
-const tokens  = require('./tokenManager');
-const rl      = require('./rateLimiter');
+const room           = require('./roomManager');
+const tokens         = require('./tokenManager');
+const rl             = require('./rateLimiter');
 const { randomNick } = require('./names');
-const webhook = require('./webhook');
+const webhook        = require('./webhook');
+const registry       = require('./playerRegistry');
 
 const MAX_PAYLOAD  = 512;
 const MAX_MSG      = 120;
@@ -26,6 +27,7 @@ function _realIp(req) {
 function handleConnection(ws, req) {
   ws._auth     = false;
   ws._clientIp = _realIp(req);
+  ws._regEntry = registry.lookup(ws._clientIp); // identidade FiveM (pode ser null)
 
   const authTimer = setTimeout(() => {
     if (!ws._auth) ws.close(4001, 'Auth timeout');
@@ -70,7 +72,7 @@ function _handleAuth(ws, msg, timer) {
 
   if (!token) {
     nick       = randomNick();
-    identifier = 'anon';
+    identifier = ws._regEntry?.identifier || 'anon';
   } else {
     const data = tokens.validateToken(token);
     if (!data) {
