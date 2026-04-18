@@ -12,9 +12,13 @@ const TW2     = TILE_W / 2;
 const TH2     = TILE_H / 2;
 const MAP_W   = 20;
 const MAP_H   = 20;
-const SPEED   = 0.07;
-const SYNC_MS = 50;
-const INTERP  = 0.22;
+const SPEED          = 0.07;
+const SYNC_MS        = 50;
+const INTERP         = 0.22;
+const SLIME_RADIUS   = 0.65; // distância de colisão em tiles
+const KNOCKBACK      = 0.38; // impulso inicial
+const FRICTION       = 0.80; // decay de velocidade por frame
+const KNOCKBACK_CD   = 700;  // ms de cooldown após cada arremesso
 
 // ═══ TILES ═══════════════════════════════════════════════════════════════════
 const T = { SAND: 0, DARK: 1, ROCK: 2 };
@@ -51,17 +55,30 @@ function makeMap() {
 
 const MAP = makeMap();
 
-// ═══ GOSMAS (objetos estáticos) ═══════════════════════════════════════════════
+// ═══ GOSMAS (móveis, sincronizadas por tempo determinístico) ══════════════════
+// baseTx/baseTy = centro do território; freq/phase garantem movimentos únicos
 const SLIMES = [
-  { tx: 4,  ty: 3,  color: '#c8b020', sz: 14 },
-  { tx: 9,  ty: 2,  color: '#3a9ac8', sz: 12 },
-  { tx: 14, ty: 6,  color: '#5ec832', sz: 16 },
-  { tx: 6,  ty: 13, color: '#9a32c8', sz: 13 },
-  { tx: 17, ty: 4,  color: '#c83232', sz: 11 },
-  { tx: 3,  ty: 9,  color: '#32c8a8', sz: 15 },
-  { tx: 13, ty: 15, color: '#c86432', sz: 12 },
-  { tx: 10, ty: 10, color: '#c832a0', sz: 10 },
-];
+  { baseTx: 4,  baseTy: 3,  color: '#c8b020', sz: 14 },
+  { baseTx: 9,  baseTy: 2,  color: '#3a9ac8', sz: 12 },
+  { baseTx: 14, baseTy: 6,  color: '#5ec832', sz: 16 },
+  { baseTx: 6,  baseTy: 13, color: '#9a32c8', sz: 13 },
+  { baseTx: 17, baseTy: 4,  color: '#c83232', sz: 11 },
+  { baseTx: 3,  baseTy: 9,  color: '#32c8a8', sz: 15 },
+  { baseTx: 13, baseTy: 15, color: '#c86432', sz: 12 },
+  { baseTx: 10, baseTy: 10, color: '#c832a0', sz: 10 },
+].map((s, i) => ({
+  ...s,
+  freq:  0.00048 + i * 0.000022,        // velocidade ligeiramente diferente por gosma
+  phase: i * (Math.PI * 2 / 8),         // fases distribuídas uniformemente
+}));
+
+// Posição mundial da gosma em função do tempo (determinístico = igual em todos os clientes)
+function getSlimePos(sl, t) {
+  return {
+    wx: sl.baseTx + 0.5 + Math.sin(t * sl.freq + sl.phase) * 1.3,
+    wy: sl.baseTy + 0.5 + Math.cos(t * sl.freq * 1.31 + sl.phase) * 1.0,
+  };
+}
 
 // ═══ CORES DOS JOGADORES ═════════════════════════════════════════════════════
 const PALETTE = [
@@ -216,10 +233,6 @@ function drawBlob(cx, cy, color, sz) {
                Math.round(sz * 0.40), Math.max(1, Math.round(sz * 0.09)));
 }
 
-function drawSlimeOnTile(ox, oy, slime) {
-  const { sx, sy } = toScreen(slime.tx + 0.5, slime.ty + 0.5);
-  drawBlob(ox + sx, oy + sy - TILE_D, slime.color, slime.sz);
-}
 
 // ═══ DESENHO: PERSONAGEM ══════════════════════════════════════════════════════
 function drawChar(x, y, color, nickname, frame, moving, isLocal) {
@@ -328,6 +341,21 @@ function drawBubble(x, y, text, isTyping) {
 function update(now) {
   if (!local) return;
 
+  const t = Date.now();
+
+  // ── Aplica knockback (velocidade decai por fricção) ──────────────────────────
+  if (local.vx !== 0 || local.vy !== 0) {
+    local.wx = Math.max(1.0, Math.min(MAP_W - 1.5, local.wx + local.vx));
+    local.wy = Math.max(1.0, Math.min(MAP_H - 1.5, local.wy + local.vy));
+    local.vx *= FRICTION;
+    local.vy *= FRICTION;
+    if (Math.abs(local.vx) < 0.001) local.vx = 0;
+    if (Math.abs(local.vy) < 0.001) local.vy = 0;
+    local.moving = true;
+    animF++;
+  }
+
+  // ── Movimento do jogador ─────────────────────────────────────────────────────
   let dx = 0, dy = 0;
   if (!chatBarOpen) {
     if (keys['w'] || keys['W'] || keys['ArrowUp'])    { dx -= 1; dy -= 1; }
@@ -337,21 +365,39 @@ function update(now) {
   }
 
   const moving = dx !== 0 || dy !== 0;
-  local.moving = moving;
-
   if (moving) {
     const len = (dx !== 0 && dy !== 0) ? Math.SQRT2 : 1;
     local.wx = Math.max(1.0, Math.min(MAP_W - 1.5, local.wx + (dx / len) * SPEED));
     local.wy = Math.max(1.0, Math.min(MAP_H - 1.5, local.wy + (dy / len) * SPEED));
+    local.moving = true;
     animF++;
+  } else if (local.vx === 0 && local.vy === 0) {
+    local.moving = false;
+  }
 
-    if (now - lastSync > SYNC_MS) {
-      lastSync = now;
-      gameWS.send({ type: 'game_move', x: local.wx, y: local.wy });
+  if (local.moving && now - lastSync > SYNC_MS) {
+    lastSync = now;
+    gameWS.send({ type: 'game_move', x: local.wx, y: local.wy });
+  }
+
+  // ── Colisão com gosmas ───────────────────────────────────────────────────────
+  if (t > local.knockbackUntil) {
+    for (const sl of SLIMES) {
+      const sp = getSlimePos(sl, t);
+      const dx2 = local.wx - sp.wx;
+      const dy2 = local.wy - sp.wy;
+      const dist = Math.sqrt(dx2 * dx2 + dy2 * dy2);
+      if (dist < SLIME_RADIUS) {
+        const len = dist < 0.01 ? 0.01 : dist;
+        local.vx += (dx2 / len) * KNOCKBACK;
+        local.vy += (dy2 / len) * KNOCKBACK;
+        local.knockbackUntil = t + KNOCKBACK_CD;
+        break;
+      }
     }
   }
 
-  // Interpola posições remotas
+  // ── Interpola posições remotas ───────────────────────────────────────────────
   for (const [, p] of remote) {
     const ddx = p.tx - p.wx;
     const ddy = p.ty - p.wy;
@@ -386,41 +432,42 @@ function render() {
   const ox = Math.round(W / 2 - psx);
   const oy = Math.round(H / 2 - psy);
 
-  // ─── PASSO 1: todos os tiles + gosmas em ordem isométrica ───────────────────
-  // Para terreno plano nunca há tile que deva cobrir um personagem —
-  // fazer dois passes separados é a única forma de garantir isso.
+  // ─── PASSO 1: tiles apenas ───────────────────────────────────────────────────
   for (let row = 0; row < MAP_W + MAP_H - 1; row++) {
     const iMin = Math.max(0, row - MAP_H + 1);
     const iMax = Math.min(row, MAP_W - 1);
-
-    for (let i = iMin; i <= iMax; i++) {
-      const j = row - i;
-      drawTile(ox, oy, i, j);
-
-      for (const sl of SLIMES) {
-        if (sl.tx === i && sl.ty === j) drawSlimeOnTile(ox, oy, sl);
-      }
-    }
+    for (let i = iMin; i <= iMax; i++) drawTile(ox, oy, i, row - i);
   }
 
-  // ─── PASSO 2: jogadores ordenados por profundidade (wx+wy crescente) ────────
-  const renderList = [{ ref: local,  wx: local.wx, wy: local.wy, animF, isLocal: true }];
-  for (const [, p] of remote) renderList.push({ ref: p, wx: p.wx, wy: p.wy, animF: p.animF || 0, isLocal: false });
+  // ─── PASSO 2: gosmas + jogadores ordenados por profundidade (wx+wy) ──────────
+  const nowMs = Date.now();
+  const renderList = [];
+
+  for (const sl of SLIMES) {
+    const pos = getSlimePos(sl, nowMs);
+    renderList.push({ kind: 'slime', sl, wx: pos.wx, wy: pos.wy });
+  }
+  renderList.push({ kind: 'player', ref: local, wx: local.wx, wy: local.wy, animF, isLocal: true });
+  for (const [, p] of remote) renderList.push({ kind: 'player', ref: p, wx: p.wx, wy: p.wy, animF: p.animF || 0, isLocal: false });
+
   renderList.sort((a, b) => (a.wx + a.wy) - (b.wx + b.wy));
 
-  const nowMs = Date.now();
   for (const entry of renderList) {
-    const p = entry.ref;
     const { sx, sy } = toScreen(entry.wx, entry.wy);
     const px = ox + sx;
     const py = oy + sy - TILE_D;
-    drawChar(px, py, p.color, p.nickname, entry.animF, p.moving || false, entry.isLocal);
 
-    if (p.bubble) {
-      if (nowMs - p.bubble.born > 6000 && !p.bubble.typing) {
-        p.bubble = null;
-      } else {
-        drawBubble(px, py, p.bubble.text, p.bubble.typing || false);
+    if (entry.kind === 'slime') {
+      drawBlob(px, py, entry.sl.color, entry.sl.sz);
+    } else {
+      const p = entry.ref;
+      drawChar(px, py, p.color, p.nickname, entry.animF, p.moving || false, entry.isLocal);
+      if (p.bubble) {
+        if (nowMs - p.bubble.born > 6000 && !p.bubble.typing) {
+          p.bubble = null;
+        } else {
+          drawBubble(px, py, p.bubble.text, p.bubble.typing || false);
+        }
       }
     }
   }
@@ -527,11 +574,13 @@ const gameWS = (() => {
       case 'auth_ok':
         local = {
           nickname: msg.nickname,
-          color:    nickToColor(msg.nickname),
+          color:           nickToColor(msg.nickname),
           wx: msg.gx ?? (MAP_W / 2),
           wy: msg.gy ?? (MAP_H / 2),
           moving: false,
           bubble: null,
+          vx: 0, vy: 0,
+          knockbackUntil: 0,
         };
         socket.send(JSON.stringify({ type: 'game_request_state' }));
         updateHUD();
