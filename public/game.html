@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sala de Espera — Jogo</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    html, body {
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #281408;
+      font-family: monospace;
+    }
+
+    #game-canvas {
+      display: block;
+      width: 100%;
+      height: 100%;
+    }
+
+    /* HUD overlay — sem box-shadow, sem filter, sem opacity fracionária */
+    #hud {
+      position: fixed;
+      top: 10px;
+      left: 10px;
+      pointer-events: none;
+    }
+
+    #hud-panel {
+      background: #0a0a14;
+      border: 1px solid #1e3a4a;
+      padding: 8px 14px;
+      color: #c8d8e0;
+      font-size: 11px;
+      line-height: 1.7;
+    }
+
+    #hud-server { color: #00e8ff; font-weight: bold; letter-spacing: 0.1em; }
+    #hud-info   { color: #c8d8e0; }
+    #hud-hint   { color: #3a6a7a; font-size: 10px; }
+
+    /* Back link */
+    #back-link {
+      position: fixed;
+      bottom: 10px;
+      left: 10px;
+      background: #0a0a14;
+      border: 1px solid #1e3a4a;
+      color: #4a8aaa;
+      font-family: monospace;
+      font-size: 10px;
+      padding: 6px 12px;
+      text-decoration: none;
+      letter-spacing: 0.08em;
+      cursor: pointer;
+    }
+    #back-link:hover { color: #00e8ff; border-color: #00e8ff; }
+  </style>
+</head>
+<body>
+
+  <canvas id="game-canvas"></canvas>
+
+  <div id="hud">
+    <div id="hud-panel">
+      <div id="hud-server">[ SERVIDOR ]</div>
+      <div id="hud-info">0 ONLINE &nbsp;•&nbsp; —</div>
+      <div id="hud-hint">WASD / ←↑↓→ para mover</div>
+    </div>
+  </div>
+
+  <a id="back-link" href="/">← SALA DE ESPERA</a>
+
+  <script src="js/game.js"></script>
+</body>
+</html>

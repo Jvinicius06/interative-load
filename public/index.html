@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sala de Espera</title>
+  <style>
+    *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; overflow: hidden; background: #281408; }
+    button { cursor: pointer; border: none; background: none; color: inherit; font: inherit; }
+    input  { border: none; background: none; color: inherit; font: inherit; }
+    input:focus { outline: none; }
+
+    #game-canvas {
+      display: block;
+      position: fixed;
+      inset: 0;
+      z-index: 9999;
+      pointer-events: none; /* cliques passam para os overlays abaixo */
+    }
+
+    /* ── HUD top-left ── */
+    #hud {
+      position: fixed;
+      top: 10px;
+      left: 10px;
+      z-index: 10000;
+      pointer-events: none;
+    }
+    #hud-inner {
+      background: #0a0a14;
+      border: 1px solid #1e3a4a;
+      padding: 8px 14px;
+      font-family: monospace;
+    }
+    #hud-server { font-size: 11px; font-weight: bold; color: #00e8ff; letter-spacing: 0.1em; }
+    #hud-info   { font-size: 10px; color: #c8d8e0; margin-top: 2px; }
+    #hud-hint   { font-size: 9px;  color: #3a6070; margin-top: 2px; }
+
+
+    /* ── Chat bar (balloon input) ── */
+    #chat-bar {
+      position: fixed;
+      bottom: 24px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 10000;
+      display: none;
+      align-items: center;
+      gap: 10px;
+      background: #0a0a14;
+      border: 1px solid #00e8ff;
+      padding: 6px 14px;
+      font-family: monospace;
+    }
+    #chat-bar.open { display: flex; }
+    #chat-hint { font-size: 9px; color: #2a5a6a; white-space: nowrap; letter-spacing: 0.06em; }
+    #chat-input {
+      font-family: monospace;
+      font-size: 12px;
+      color: #deeef8;
+      background: #0e0e1e;
+      border: 1px solid #1e4a5a;
+      padding: 4px 8px;
+      width: 260px;
+      user-select: text;
+    }
+    #chat-input::placeholder { color: #2a4a5a; }
+    #chat-input:focus { outline: none; border-color: #00e8ff; }
+  </style>
+</head>
+<body>
+
+  <canvas id="game-canvas"></canvas>
+
+  <!-- HUD -->
+  <div id="hud">
+    <div id="hud-inner">
+      <div id="hud-server">[ SERVIDOR ]</div>
+      <div id="hud-info">0 ONLINE  •  —</div>
+      <div id="hud-hint">WASD / ←↑↓→  mover</div>
+    </div>
+  </div>
+
+
+  <!-- Chat bar (balloon input) -->
+  <div id="chat-bar">
+    <span id="chat-hint">ENTER enviar &nbsp;•&nbsp; ESC cancelar</span>
+    <input id="chat-input" type="text" placeholder="mensagem..." maxlength="120" autocomplete="off" spellcheck="false">
+  </div>
+
+<script src="js/game.js"></script>
+</body>
+</html>
