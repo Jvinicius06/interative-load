@@ -19,6 +19,7 @@ const app    = express();
 const server = http.createServer(app);
 const wss    = new WebSocketServer({ server, maxPayload: 1024 });
 
+app.set('trust proxy', true); // lê X-Forwarded-For do Traefik
 app.use(express.json({ limit: '10kb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
@@ -75,7 +76,7 @@ app.get('/api/health', (req, res) => {
 
 // ─── WebSocket ─────────────────────────────────────────────────────────────────
 
-wss.on('connection', (ws) => wsHandler.handleConnection(ws));
+wss.on('connection', (ws, req) => wsHandler.handleConnection(ws, req));
 
 // ─── Start ─────────────────────────────────────────────────────────────────────
 

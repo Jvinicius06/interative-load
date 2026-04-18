@@ -17,8 +17,15 @@ const sanitize = (s) =>
     .replace(/"/g, '&quot;')
     .trim();
 
-function handleConnection(ws) {
-  ws._auth = false;
+function _realIp(req) {
+  const fwd = req?.headers?.['x-forwarded-for'];
+  if (fwd) return fwd.split(',')[0].trim();
+  return req?.headers?.['x-real-ip'] || req?.socket?.remoteAddress || 'desconhecido';
+}
+
+function handleConnection(ws, req) {
+  ws._auth     = false;
+  ws._clientIp = _realIp(req);
 
   const authTimer = setTimeout(() => {
     if (!ws._auth) ws.close(4001, 'Auth timeout');
@@ -122,8 +129,7 @@ function _handleChat(ws, msg) {
     timestamp: Date.now(),
   });
 
-  const ip = ws._socket?.remoteAddress || 'desconhecido';
-  webhook.sendChatLog(player.nickname, player.identifier, ip, clean);
+  webhook.sendChatLog(player.nickname, player.identifier, ws._clientIp, clean);
 }
 
 function _handleGameMove(ws, msg) {
