@@ -20,6 +20,14 @@ const KNOCKBACK      = 0.38; // impulso inicial
 const FRICTION       = 0.80; // decay de velocidade por frame
 const KNOCKBACK_CD   = 700;  // ms de cooldown após cada arremesso
 
+const SLIME_MAX_HP   = 3;
+const SLIME_SPEED    = 0.014; // tiles/frame (≈ 20 % da velocidade do jogador)
+const BALL_SPEED     = 0.18;  // tiles/frame
+const BALL_MAX_AGE   = 90;    // frames antes de sumir
+const BALL_HIT_R     = 0.72;  // raio de hit em tiles
+const EXPL_FRAMES    = 26;    // duração da animação de explosão
+const SHOOT_CD       = 350;   // ms entre tiros
+
 // ═══ TILES ═══════════════════════════════════════════════════════════════════
 const T = { SAND: 0, DARK: 1, ROCK: 2 };
 
@@ -68,16 +76,16 @@ const SLIMES = [
   { baseTx: 10, baseTy: 10, color: '#c832a0', sz: 10 },
 ].map((s, i) => ({
   ...s,
-  freq:  0.00048 + i * 0.000022,        // velocidade ligeiramente diferente por gosma
-  phase: i * (Math.PI * 2 / 8),         // fases distribuídas uniformemente
+  hp:    SLIME_MAX_HP,
+  wx:    s.baseTx + 0.5,   // posição atual (atualizada a cada frame)
+  wy:    s.baseTy + 0.5,
+  freq:  0.00048 + i * 0.000022,
+  phase: i * (Math.PI * 2 / 8),
 }));
 
-// Posição mundial da gosma em função do tempo (determinístico = igual em todos os clientes)
-function getSlimePos(sl, t) {
-  return {
-    wx: sl.baseTx + 0.5 + Math.sin(t * sl.freq + sl.phase) * 1.3,
-    wy: sl.baseTy + 0.5 + Math.cos(t * sl.freq * 1.31 + sl.phase) * 1.0,
-  };
+// Retorna a posição atual da gosma (atualizada via IA no update)
+function getSlimePos(sl) {
+  return { wx: sl.wx, wy: sl.wy };
 }
 
 // ═══ CORES DOS JOGADORES ═════════════════════════════════════════════════════
@@ -118,22 +126,57 @@ function toScreen(wx, wy) {
 }
 
 // ═══ ESTADO ══════════════════════════════════════════════════════════════════
-let local      = null;
-let remote     = new Map();
-let keys       = {};
-let animF      = 0;
-let lastSync   = 0;
-let serverName = 'SERVIDOR';
-let chatBarOpen = false;
+let local        = null;
+let remote       = new Map();
+let keys         = {};
+let animF        = 0;
+let lastSync     = 0;
+let serverName   = 'SERVIDOR';
+let chatBarOpen  = false;
+let powerBalls   = [];  // { wx, wy, vx, vy, age }
+let explosions   = [];  // { wx, wy, frame, maxF }
+let lastShot     = 0;
+let scoreboard   = [];  // [{ nickname, kills }] ordenado por kills desc
 
 // ═══ INPUT ═══════════════════════════════════════════════════════════════════
 window.addEventListener('keydown', (e) => {
-  if (chatBarOpen) return; // chat input captures all keys
+  if (chatBarOpen) return;
   if (e.key === 'Enter') { e.preventDefault(); openChatBar(); return; }
   keys[e.key] = true;
   if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' '].includes(e.key)) e.preventDefault();
 });
 window.addEventListener('keyup', (e) => { keys[e.key] = false; });
+
+// Clique → atirar bola de poder
+canvas.style.cursor        = 'crosshair';
+canvas.style.pointerEvents = 'auto'; // o canvas estava com pointer-events:none no CSS
+canvas.addEventListener('click', (e) => {
+  if (!local || chatBarOpen) return;
+  const now = Date.now();
+  if (now - lastShot < SHOOT_CD) return;
+  lastShot = now;
+
+  // Converte clique para coordenadas de mundo (projeção isométrica inversa)
+  const { sx: psx, sy: psy } = toScreen(local.wx, local.wy);
+  const ox = canvas.width  / 2 - psx;
+  const oy = canvas.height / 2 - psy;
+  const a  = (e.clientX - ox) / TW2;
+  const b  = (e.clientY - oy) / TH2;
+  const tw = (a + b) / 2;
+  const ty = (b - a) / 2;
+
+  const ddx = tw - local.wx;
+  const ddy = ty - local.wy;
+  const len = Math.sqrt(ddx * ddx + ddy * ddy) || 1;
+  if (len < 0.3) return;
+
+  powerBalls.push({
+    wx: local.wx, wy: local.wy,
+    vx: (ddx / len) * BALL_SPEED,
+    vy: (ddy / len) * BALL_SPEED,
+    age: 0,
+  });
+});
 
 // ═══ DESENHO: TILE ════════════════════════════════════════════════════════════
 function drawTile(ox, oy, tx, ty) {
@@ -337,6 +380,118 @@ function drawBubble(x, y, text, isTyping) {
   ctx.fillText(display, bx, boxBottomY - 5);
 }
 
+// ═══ DESENHO: BARRA DE HP DA GOSMA ════════════════════════════════════════════
+function drawSlimeHP(cx, cy, sz, hp) {
+  const bw = 8, bh = 4, gap = 2;
+  const totalW = SLIME_MAX_HP * (bw + gap) - gap;
+  let bx = Math.round(cx - totalW / 2);
+  const by = Math.round(cy - sz - 16);
+  for (let i = 0; i < SLIME_MAX_HP; i++) {
+    ctx.fillStyle = '#000000';
+    ctx.fillRect(bx - 1, by - 1, bw + 2, bh + 2);
+    ctx.fillStyle = i < hp ? '#48e848' : '#2a2a2a';
+    ctx.fillRect(bx, by, bw, bh);
+    bx += bw + gap;
+  }
+}
+
+// ═══ DESENHO: BOLA DE PODER ═══════════════════════════════════════════════════
+function drawBall(cx, cy) {
+  const rx = Math.round(cx), ry = Math.round(cy);
+  ctx.fillStyle = '#ff6600';
+  ctx.beginPath();
+  ctx.arc(rx, ry, 6, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = '#ffdd00';
+  ctx.beginPath();
+  ctx.arc(rx, ry, 3, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(rx - 1, ry - 2, 2, 2);
+}
+
+// ═══ DESENHO: PLACAR ══════════════════════════════════════════════════════════
+function drawScoreboard() {
+  if (!scoreboard.length) return;
+
+  const MAX_ROWS = Math.min(scoreboard.length, 10);
+  const ROW_H    = 15;
+  const PAD_X    = 8;
+  const PAD_Y    = 6;
+  const W        = 170;
+  const TITLE_H  = 16;
+  const H        = PAD_Y * 2 + TITLE_H + MAX_ROWS * ROW_H + 2;
+  const rx       = canvas.width - 12;  // direita
+  const ry       = 12;                  // topo
+
+  // Borda
+  ctx.fillStyle = '#1e3a4a';
+  ctx.fillRect(rx - W - 1, ry - 1, W + 2, H + 2);
+
+  // Fundo
+  ctx.fillStyle = '#08080f';
+  ctx.fillRect(rx - W, ry, W, H);
+
+  // Título
+  ctx.font = 'bold 10px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#ffdd00';
+  ctx.fillText('SLIMES MORTOS', rx - W / 2, ry + PAD_Y + 9);
+
+  // Separador
+  ctx.fillStyle = '#1e3a4a';
+  ctx.fillRect(rx - W + PAD_X, ry + PAD_Y + TITLE_H, W - PAD_X * 2, 1);
+
+  // Linhas
+  ctx.font = '10px monospace';
+  for (let i = 0; i < MAX_ROWS; i++) {
+    const s    = scoreboard[i];
+    const ly   = ry + PAD_Y + TITLE_H + 4 + i * ROW_H;
+    const self = local && s.nickname === local.nickname;
+
+    // Destaque do jogador local
+    if (self) {
+      ctx.fillStyle = '#0a1a2a';
+      ctx.fillRect(rx - W + 2, ly, W - 4, ROW_H - 1);
+    }
+
+    // Posição
+    ctx.fillStyle = i === 0 ? '#ffdd00' : '#506070';
+    ctx.textAlign = 'left';
+    ctx.fillText(`${i + 1}.`, rx - W + PAD_X, ly + 10);
+
+    // Nome
+    ctx.fillStyle = self ? '#00e8ff' : '#c8d8e0';
+    ctx.fillText(s.nickname, rx - W + PAD_X + 18, ly + 10);
+
+    // Kills
+    ctx.textAlign = 'right';
+    ctx.fillStyle = s.kills > 0 ? '#48e848' : '#3a5040';
+    ctx.fillText(String(s.kills), rx - PAD_X, ly + 10);
+  }
+}
+
+// ═══ DESENHO: EXPLOSÃO ════════════════════════════════════════════════════════
+function drawExplosion(cx, cy, frame, maxF) {
+  const progress = frame / maxF;
+  const r   = progress * 40;
+  const sz  = Math.max(1, Math.round(8 * (1 - progress)));
+  const COL = ['#ffee00', '#ff9900', '#ff4400', '#ff2020'];
+  for (let i = 0; i < 8; i++) {
+    const angle = (i / 8) * Math.PI * 2;
+    const ex = Math.round(cx + Math.cos(angle) * r);
+    const ey = Math.round(cy + Math.sin(angle) * r);
+    ctx.fillStyle = COL[i % COL.length];
+    ctx.fillRect(ex - sz, ey - sz, sz * 2, sz * 2);
+  }
+  // Núcleo piscando
+  if (frame < maxF * 0.4) {
+    ctx.fillStyle = '#ffffff';
+    const cs = Math.round(6 * (1 - progress / 0.4));
+    ctx.fillRect(Math.round(cx) - cs, Math.round(cy) - cs, cs * 2, cs * 2);
+  }
+}
+
 // ═══ UPDATE ══════════════════════════════════════════════════════════════════
 function update(now) {
   if (!local) return;
@@ -380,10 +535,11 @@ function update(now) {
     gameWS.send({ type: 'game_move', x: local.wx, y: local.wy });
   }
 
-  // ── Colisão com gosmas ───────────────────────────────────────────────────────
+  // ── Colisão com gosmas (explosão + knockback) ────────────────────────────────
   if (t > local.knockbackUntil) {
-    for (const sl of SLIMES) {
-      const sp = getSlimePos(sl, t);
+    for (let i = 0; i < SLIMES.length; i++) {
+      const sl  = SLIMES[i];
+      const sp  = getSlimePos(sl);
       const dx2 = local.wx - sp.wx;
       const dy2 = local.wy - sp.wy;
       const dist = Math.sqrt(dx2 * dx2 + dy2 * dy2);
@@ -392,10 +548,58 @@ function update(now) {
         local.vx += (dx2 / len) * KNOCKBACK;
         local.vy += (dy2 / len) * KNOCKBACK;
         local.knockbackUntil = t + KNOCKBACK_CD;
+        // Explosion visual local imediata (o server confirmará o respawn)
+        explosions.push({ wx: sp.wx, wy: sp.wy, frame: 0, maxF: EXPL_FRAMES });
+        gameWS.send({ type: 'game_slime_touch', slimeIndex: i });
         break;
       }
     }
   }
+
+  // ── IA das gosmas: perseguição ao jogador mais próximo ──────────────────────
+  for (const sl of SLIMES) {
+    let nearDist = Infinity, nearWx = sl.wx, nearWy = sl.wy;
+    if (local) {
+      const d = Math.hypot(local.wx - sl.wx, local.wy - sl.wy);
+      if (d < nearDist) { nearDist = d; nearWx = local.wx; nearWy = local.wy; }
+    }
+    for (const [, p] of remote) {
+      const d = Math.hypot(p.wx - sl.wx, p.wy - sl.wy);
+      if (d < nearDist) { nearDist = d; nearWx = p.wx; nearWy = p.wy; }
+    }
+    if (nearDist > 0.05) {
+      sl.wx += ((nearWx - sl.wx) / nearDist) * SLIME_SPEED;
+      sl.wy += ((nearWy - sl.wy) / nearDist) * SLIME_SPEED;
+      sl.wx  = Math.max(0.5, Math.min(MAP_W - 0.5, sl.wx));
+      sl.wy  = Math.max(0.5, Math.min(MAP_H - 0.5, sl.wy));
+    }
+  }
+
+  // ── Bolas de poder ───────────────────────────────────────────────────────────
+  const nowT = Date.now();
+  const alive = [];
+  for (const b of powerBalls) {
+    b.wx += b.vx;
+    b.wy += b.vy;
+    b.age++;
+    if (b.age >= BALL_MAX_AGE || b.wx < 0.5 || b.wx > MAP_W - 0.5 ||
+                                  b.wy < 0.5 || b.wy > MAP_H - 0.5) continue;
+    let hit = false;
+    for (let i = 0; i < SLIMES.length; i++) {
+      const sp = getSlimePos(SLIMES[i]);
+      if (Math.hypot(b.wx - sp.wx, b.wy - sp.wy) < BALL_HIT_R) {
+        explosions.push({ wx: sp.wx, wy: sp.wy, frame: 0, maxF: Math.round(EXPL_FRAMES * 0.6) });
+        gameWS.send({ type: 'game_shoot', slimeIndex: i });
+        hit = true;
+        break;
+      }
+    }
+    if (!hit) alive.push(b);
+  }
+  powerBalls = alive;
+
+  // ── Explosões (animação) ─────────────────────────────────────────────────────
+  explosions = explosions.filter(e => { e.frame++; return e.frame < e.maxF; });
 
   // ── Interpola posições remotas ───────────────────────────────────────────────
   for (const [, p] of remote) {
@@ -443,9 +647,10 @@ function render() {
   const nowMs = Date.now();
   const renderList = [];
 
-  for (const sl of SLIMES) {
+  for (let i = 0; i < SLIMES.length; i++) {
+    const sl  = SLIMES[i];
     const pos = getSlimePos(sl, nowMs);
-    renderList.push({ kind: 'slime', sl, wx: pos.wx, wy: pos.wy });
+    renderList.push({ kind: 'slime', sl, idx: i, wx: pos.wx, wy: pos.wy });
   }
   renderList.push({ kind: 'player', ref: local, wx: local.wx, wy: local.wy, animF, isLocal: true });
   for (const [, p] of remote) renderList.push({ kind: 'player', ref: p, wx: p.wx, wy: p.wy, animF: p.animF || 0, isLocal: false });
@@ -459,6 +664,7 @@ function render() {
 
     if (entry.kind === 'slime') {
       drawBlob(px, py, entry.sl.color, entry.sl.sz);
+      drawSlimeHP(px, py, entry.sl.sz, entry.sl.hp);
     } else {
       const p = entry.ref;
       drawChar(px, py, p.color, p.nickname, entry.animF, p.moving || false, entry.isLocal);
@@ -471,6 +677,21 @@ function render() {
       }
     }
   }
+
+  // ─── PASSO 3: bolas de poder ─────────────────────────────────────────────────
+  for (const b of powerBalls) {
+    const { sx, sy } = toScreen(b.wx, b.wy);
+    drawBall(ox + sx, oy + sy - TILE_D);
+  }
+
+  // ─── PASSO 4: explosões ───────────────────────────────────────────────────────
+  for (const expl of explosions) {
+    const { sx, sy } = toScreen(expl.wx, expl.wy);
+    drawExplosion(ox + sx, oy + sy - TILE_D, expl.frame, expl.maxF);
+  }
+
+  // ─── PASSO 5: placar ─────────────────────────────────────────────────────────
+  drawScoreboard();
 }
 
 function gameLoop(now) {
@@ -630,6 +851,40 @@ const gameWS = (() => {
       case 'player_count':
         updateHUD();
         break;
+
+      case 'game_scoreboard':
+        scoreboard = msg.scores || [];
+        break;
+
+      case 'game_slime_state':
+        for (const s of msg.slimes) {
+          const sl = SLIMES[s.index];
+          if (!sl) continue;
+          sl.hp     = s.hp;
+          sl.baseTx = s.baseTx;
+          sl.baseTy = s.baseTy;
+          sl.wx     = s.baseTx + 0.5;
+          sl.wy     = s.baseTy + 0.5;
+        }
+        break;
+
+      case 'game_slime_hp': {
+        const sl = SLIMES[msg.slimeIndex];
+        if (sl) sl.hp = msg.hp;
+        break;
+      }
+
+      case 'game_slime_respawn': {
+        const sl = SLIMES[msg.slimeIndex];
+        if (!sl) break;
+        explosions.push({ wx: sl.wx, wy: sl.wy, frame: 0, maxF: EXPL_FRAMES });
+        sl.hp     = SLIME_MAX_HP;
+        sl.baseTx = msg.baseTx;
+        sl.baseTy = msg.baseTy;
+        sl.wx     = msg.baseTx + 0.5;
+        sl.wy     = msg.baseTy + 0.5;
+        break;
+      }
 
       case 'error':
         break;
