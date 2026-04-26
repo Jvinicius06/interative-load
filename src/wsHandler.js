@@ -64,6 +64,7 @@ function handleConnection(ws, req) {
       case 'game_request_state': _handleGameRequestState(ws);    break;
       case 'game_shoot':         _handleGameShoot(ws, msg);      break;
       case 'game_slime_touch':   _handleGameSlimeTouch(ws, msg); break;
+      case 'game_ball_spawn':    _handleGameBallSpawn(ws, msg);  break;
     }
   });
 
@@ -198,6 +199,20 @@ function _handleGameShoot(ws, msg) {
     }
     room.broadcast({ type: 'game_slime_respawn', slimeIndex: idx, baseTx: result.baseTx, baseTy: result.baseTy });
   }
+}
+
+function _handleGameBallSpawn(ws, msg) {
+  const wx = +msg.wx, wy = +msg.wy, vx = +msg.vx, vy = +msg.vy;
+  if (![wx, wy, vx, vy].every(Number.isFinite)) return;
+  const speed = Math.hypot(vx, vy);
+  if (speed < 0.01 || speed > 1.0) return;
+  const player = room.getPlayer(ws);
+  if (!player) return;
+  room.broadcast({
+    type:      'game_ball_spawn',
+    ownerNick: player.nickname,
+    wx, wy, vx, vy,
+  }, ws);
 }
 
 function _handleGameSlimeTouch(ws, msg) {

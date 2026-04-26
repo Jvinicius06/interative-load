@@ -170,12 +170,15 @@ canvas.addEventListener('click', (e) => {
   const len = Math.sqrt(ddx * ddx + ddy * ddy) || 1;
   if (len < 0.3) return;
 
+  const vx = (ddx / len) * BALL_SPEED;
+  const vy = (ddy / len) * BALL_SPEED;
   powerBalls.push({
     wx: local.wx, wy: local.wy,
-    vx: (ddx / len) * BALL_SPEED,
-    vy: (ddy / len) * BALL_SPEED,
+    vx, vy,
     age: 0,
+    ownerNick: local.nickname,
   });
+  gameWS.send({ type: 'game_ball_spawn', wx: local.wx, wy: local.wy, vx, vy });
 });
 
 // ═══ DESENHO: TILE ════════════════════════════════════════════════════════════
@@ -589,7 +592,7 @@ function update(now) {
       const sp = getSlimePos(SLIMES[i]);
       if (Math.hypot(b.wx - sp.wx, b.wy - sp.wy) < BALL_HIT_R) {
         explosions.push({ wx: sp.wx, wy: sp.wy, frame: 0, maxF: Math.round(EXPL_FRAMES * 0.6) });
-        gameWS.send({ type: 'game_shoot', slimeIndex: i });
+        if (b.ownerNick === local.nickname) gameWS.send({ type: 'game_shoot', slimeIndex: i });
         hit = true;
         break;
       }
@@ -854,6 +857,16 @@ const gameWS = (() => {
 
       case 'game_scoreboard':
         scoreboard = msg.scores || [];
+        break;
+
+      case 'game_ball_spawn':
+        if (msg.ownerNick === local?.nickname) break;
+        powerBalls.push({
+          wx: +msg.wx, wy: +msg.wy,
+          vx: +msg.vx, vy: +msg.vy,
+          age: 0,
+          ownerNick: msg.ownerNick,
+        });
         break;
 
       case 'game_slime_state':

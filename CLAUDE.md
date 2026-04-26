@@ -94,6 +94,8 @@ O fluxo é simples:
 | C → S | `game_move` | `{ x, y }` |
 | S → outros | `game_player_update` | `{ nickname, x, y }` |
 | S → todos | `game_player_leave` | `{ nickname }` |
+| C → S | `game_ball_spawn` | `{ wx, wy, vx, vy }` |
+| S → outros | `game_ball_spawn` | `{ ownerNick, wx, wy, vx, vy }` |
 
 ---
 

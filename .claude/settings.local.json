@@ -5,7 +5,9 @@
       "Bash(echo \"DEV_MODE=true\")",
       "Bash(node -e \"require\\('./src/tokenManager'\\); require\\('./src/roomManager'\\); require\\('./src/rateLimiter'\\); require\\('./src/wsHandler'\\); require\\('./config/config'\\); console.log\\('Todos os modulos OK'\\)\")",
       "Bash(node server.js)",
-      "Bash(node -e ' *)"
+      "Bash(node -e ' *)",
+      "Bash(node *)",
+      "Bash(echo \"EXIT:$?\")"
     ]
   }
 }
